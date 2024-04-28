@@ -1,4 +1,4 @@
-part of x509;
+part of 'x509_base.dart';
 
 /// An X.509 extension
 class Extension {
@@ -53,6 +53,27 @@ class Extension {
     return Extension(extnId: id, isCritical: critical, extnValue: value);
   }
 
+  ASN1Sequence toAsn1(){
+    if(extnValue is ToAsn1){
+      var asn1ExtValue = extnValue as ToAsn1;
+      var topSequence = _getExtensionInstance();
+      var asn1 = asn1ExtValue.toAsn1();
+      var o = ASN1OctetString(asn1.encodedBytes);
+      topSequence.add(o);
+      return topSequence;
+    }else{
+      throw UnimplementedError('Conversion from ${extnValue.runtimeType} to ASN.1 has not yet been implemented' );
+    }
+  }
+
+  ASN1Sequence _getExtensionInstance(){
+    var topSequence = ASN1Sequence();
+    topSequence.add(extnId.toAsn1());
+    if(isCritical) topSequence.add(fromDart(isCritical));
+    return topSequence;
+  }
+
+
   @override
   String toString([String prefix = '']) {
     var buffer = StringBuffer();
@@ -62,11 +83,63 @@ class Extension {
   }
 }
 
+class BasicConstraintsExtension extends Extension{
+  BasicConstraintsExtension({super.isCritical, bool cA = false, int? pathLenConstraint})
+      : super(extnId: ObjectIdentifier.fromOiReadableName('basicConstraints'),
+      extnValue: BasicConstraints(cA: cA, pathLenConstraint: pathLenConstraint));
+}
+
+class KeyUsageExtension extends Extension{
+  
+  KeyUsageExtension({super.isCritical,
+    required bool digitalSignature,
+    required bool nonRepudiation,
+    required bool keyEncipherment,
+    required bool dataEncipherment,
+    required bool keyAgreement,
+    required bool keyCertSign,
+    required bool cRLSign,
+    required bool encipherOnly,
+    required bool decipherOnly})
+      : super(extnId: ObjectIdentifier.keyUsage, extnValue: KeyUsage(digitalSignature: digitalSignature, nonRepudiation: nonRepudiation, keyEncipherment: keyEncipherment, dataEncipherment: dataEncipherment, keyAgreement: keyAgreement, keyCertSign: keyCertSign, cRLSign: cRLSign, encipherOnly: encipherOnly, decipherOnly: decipherOnly));
+
+  factory KeyUsageExtension.optional({
+    bool isCritical = false,
+    bool digitalSignature = false,
+    bool nonRepudiation = false,
+    bool keyEncipherment = false,
+    bool dataEncipherment = false,
+    bool keyAgreement = false,
+    bool keyCertSign = false,
+    bool cRLSign = false,
+    bool encipherOnly = false,
+    bool decipherOnly = false}){
+    return KeyUsageExtension(
+        isCritical : isCritical,
+        digitalSignature: digitalSignature,
+        nonRepudiation: nonRepudiation,
+        keyEncipherment: keyEncipherment,
+        dataEncipherment: dataEncipherment,
+        keyAgreement: keyAgreement,
+        keyCertSign: keyCertSign,
+        cRLSign: cRLSign,
+        encipherOnly: encipherOnly,
+        decipherOnly: decipherOnly
+    );
+  }
+}
+
+class SubjectAltNameExtension extends Extension{
+
+  SubjectAltNameExtension({super.isCritical, required List<GeneralName> names}) : super(extnId: ObjectIdentifier.subjectAltName,
+      extnValue: GeneralNames(names));
+}
+
 /// The base class for extension values.
 abstract class ExtensionValue {
   static const ceId = ObjectIdentifier([2, 5, 29]);
   static const peId = ObjectIdentifier([1, 3, 6, 1, 5, 5, 7, 1]);
-  static const goog24Id = ObjectIdentifier([1, 3, 6, 1, 4, 1, 11129, 2, 4]);
+  static const google24Id = ObjectIdentifier([1, 3, 6, 1, 4, 1, 11129, 2, 4]);
 
   const ExtensionValue();
 
@@ -113,7 +186,7 @@ abstract class ExtensionValue {
           return ProxyCertInfo.fromAsn1(obj as ASN1Sequence);
       }
     }
-    if (id.parent == goog24Id) {
+    if (id.parent == google24Id) {
       switch (id.nodes.last) {
         case 2:
           return SctList.fromAsn1(obj as ASN1OctetString);
@@ -127,13 +200,21 @@ abstract class ExtensionValue {
 ///
 /// The authority key identifier extension provides a means of identifying the
 /// public key corresponding to the private key used to sign a certificate.
-class AuthorityKeyIdentifier extends ExtensionValue {
+class AuthorityKeyIdentifier extends ExtensionValue implements ToAsn1<ASN1Sequence>{
   final List<int>? keyIdentifier;
   final GeneralNames? authorityCertIssuer;
   final BigInt? authorityCertSerialNumber;
 
   AuthorityKeyIdentifier(this.keyIdentifier, this.authorityCertIssuer,
       this.authorityCertSerialNumber);
+
+  factory AuthorityKeyIdentifier.fromPublicKeyBytes(Uint8List bytes){
+    return AuthorityKeyIdentifier(sha1.convert(bytes).bytes, null, null);
+  }
+
+  factory AuthorityKeyIdentifier.fromSubjectKeyIdentifier(SubjectKeyIdentifier ski){
+    return AuthorityKeyIdentifier(ski.keyIdentifier, null, null);
+  }
 
   /// Creates an authority key identifier extension value from an [ASN1Sequence].
   ///
@@ -165,23 +246,46 @@ class AuthorityKeyIdentifier extends ExtensionValue {
     }
     return AuthorityKeyIdentifier(keyId, issuer, number);
   }
+
+  @override
+  ASN1Sequence toAsn1() {
+    var sequence = ASN1Sequence();
+    if(keyIdentifier != null) sequence.add(ASN1Object.preEncoded(0x80, Uint8List.fromList(keyIdentifier!)));
+    if(authorityCertIssuer != null) sequence.add(ASN1Object.preEncoded(0x81, authorityCertIssuer!.toAsn1().encodedBytes));
+    if(authorityCertSerialNumber != null) sequence.add(ASN1Object.preEncoded(0x82, fromDart(authorityCertSerialNumber).encodedBytes));
+    return sequence;
+  }
+
+
 }
 
 /// The subject key identifier extension provides a means of identifying
 /// certificates that contain a particular public key.
-class SubjectKeyIdentifier extends ExtensionValue {
+class SubjectKeyIdentifier extends ExtensionValue implements ToAsn1<ASN1Object>{
   final List<int>? keyIdentifier;
 
   SubjectKeyIdentifier(this.keyIdentifier);
 
+  factory SubjectKeyIdentifier.fromPublicKeyBytes(Uint8List bytes){
+    return SubjectKeyIdentifier(sha1.convert(bytes).bytes);
+  }
+
   factory SubjectKeyIdentifier.fromAsn1(ASN1Object obj) {
     return SubjectKeyIdentifier(obj.contentBytes());
+  }
+
+  @override
+  ASN1Object toAsn1() {
+    if(keyIdentifier == null){
+      throw StateError('A subject key identifier should not be converted to ASN1 if there is no value');
+    }
+    return ASN1OctetString(Uint8List.fromList(keyIdentifier!));
   }
 }
 
 /// The key usage extension defines the purpose (e.g., encipherment, signature,
 /// certificate signing) of the key contained in the certificate.
-class KeyUsage extends ExtensionValue {
+class KeyUsage extends ExtensionValue implements ToAsn1<ASN1BitString>{
   /// True when the subject public key is used for verifying digital signatures,
   /// other than signatures on certificates and CRLs, such as those used in an
   /// entity authentication service, a data origin authentication service,
@@ -250,6 +354,30 @@ class KeyUsage extends ExtensionValue {
       required this.encipherOnly,
       required this.decipherOnly});
 
+
+  factory KeyUsage.optional({
+    bool digitalSignature = false,
+    bool nonRepudiation = false,
+    bool keyEncipherment = false,
+    bool dataEncipherment = false,
+    bool keyAgreement = false,
+    bool keyCertSign = false,
+    bool cRLSign = false,
+    bool encipherOnly = false,
+    bool decipherOnly = false}){
+    return KeyUsage(
+        digitalSignature: digitalSignature,
+        nonRepudiation: nonRepudiation,
+        keyEncipherment: keyEncipherment,
+        dataEncipherment: dataEncipherment,
+        keyAgreement: keyAgreement,
+        keyCertSign: keyCertSign,
+        cRLSign: cRLSign,
+        encipherOnly: encipherOnly,
+        decipherOnly: decipherOnly
+    );
+  }
+
   /// Creates a key usage extension from an [ASN1BitString].
   ///
   /// The ASN.1 definition is:
@@ -288,6 +416,22 @@ class KeyUsage extends ExtensionValue {
   }
 
   @override
+  ASN1BitString toAsn1(){
+    var bits = ASN1BitStringExtension.fromBitArray([
+      digitalSignature,
+      nonRepudiation,
+      keyEncipherment,
+      dataEncipherment,
+      keyAgreement,
+      keyCertSign,
+      cRLSign,
+      encipherOnly,
+      decipherOnly
+    ]);
+    return bits;
+  }
+
+  @override
   String toString() => [
         digitalSignature ? 'Digital Signature' : null
         // TODO others
@@ -297,13 +441,22 @@ class KeyUsage extends ExtensionValue {
 /// This extension indicates one or more purposes for which the certified
 /// public key may be used, in addition to or in place of the basic purposes
 /// indicated in the key usage extension.
-class ExtendedKeyUsage extends ExtensionValue {
+class ExtendedKeyUsage extends ExtensionValue implements ToAsn1<ASN1Sequence>{
   final List<ObjectIdentifier> ids;
 
   const ExtendedKeyUsage(this.ids);
 
   factory ExtendedKeyUsage.fromAsn1(ASN1Sequence sequence) {
     return ExtendedKeyUsage((toDart(sequence) as List).cast());
+  }
+
+  @override
+  ASN1Sequence toAsn1(){
+    var sequence = ASN1Sequence();
+    for(var id in ids){
+      sequence.add(id.toAsn1());
+    }
+    return sequence;
   }
 
   @override
@@ -344,7 +497,7 @@ class PrivateKeyUsagePeriod extends ExtensionValue {
 /// The basic constraints extension identifies whether the subject of the
 /// certificate is a CA and the maximum depth of valid certification paths
 /// that include this certificate.
-class BasicConstraints extends ExtensionValue {
+class BasicConstraints extends ExtensionValue implements ToAsn1<ASN1Sequence>{
   final bool cA;
   final int? pathLenConstraint;
 
@@ -369,6 +522,16 @@ class BasicConstraints extends ExtensionValue {
       }
     }
     return BasicConstraints(cA: cA, pathLenConstraint: len);
+  }
+
+  @override
+  ASN1Sequence toAsn1(){
+    var sequence = ASN1Sequence();
+    if(cA) sequence.add(fromDart(cA));
+    if(pathLenConstraint != null){
+      sequence.add(fromDart(pathLenConstraint));
+    }
+    return sequence;
   }
 
   @override
@@ -783,6 +946,9 @@ class GeneralName {
     'registeredID',
   ];
 
+  static final choiceDnsName = 2;
+  static final choiceIpAddress = 7;
+
   factory GeneralName.fromAsn1(ASN1Object obj) {
     var tag = obj.tag;
     var isConstructed = (0xA0 & tag) == 0xA0;
@@ -818,6 +984,13 @@ class GeneralName {
         isConstructed: isConstructed, choice: choice, contents: contents!);
   }
 
+  ASN1Object toAsn1(){
+    var tag = isConstructed ? 0xA0 : 0x80;
+    tag = tag | choice;
+    var object = ASN1Object.preEncoded(tag, contents.valueBytes());
+    return object;
+  }
+
   @override
   String toString() {
     String contentsString;
@@ -832,7 +1005,15 @@ class GeneralName {
   }
 }
 
-class GeneralNames extends ExtensionValue {
+class DNSName extends GeneralName{
+  DNSName(String dnsName) : super(isConstructed: false, choice: GeneralName.choiceDnsName, contents: ASN1IA5String(dnsName));
+}
+
+class IPAddressName extends GeneralName{
+  IPAddressName(int octet1, int octet2, int octet3, int octet4) : super(isConstructed: false, choice: GeneralName.choiceIpAddress, contents: ASN1OctetString([octet1, octet2, octet3, octet4]));
+}
+
+class GeneralNames extends ExtensionValue implements ToAsn1<ASN1Object>{
   List<GeneralName> names;
 
   GeneralNames(this.names);
@@ -848,6 +1029,15 @@ class GeneralNames extends ExtensionValue {
       var name = GeneralName.fromAsn1(obj);
       return GeneralNames([name]);
     }
+  }
+
+  @override
+  ASN1Object toAsn1(){
+    var sequence = ASN1Sequence();
+    for(var name in names){
+      sequence.add(name.toAsn1());
+    }
+    return sequence;
   }
 
   @override

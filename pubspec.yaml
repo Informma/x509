@@ -12,10 +12,13 @@ dependencies:
   asn1lib: ^1.0.0
   quiver: ^3.0.0
   crypto_keys: ">=0.2.0 <0.4.0"
+  basic_utils: ^5.0.0
+  crypto: ^3.0.0
+  collection: ^1.0.0
 
 dev_dependencies:
   test: ^1.0.0
-  lints: ^2.0.0
+  lints: ^3.0.0
 
 false_secrets:
   - test/files/*

@@ -25,6 +25,12 @@ void main() {
       var oid = ObjectIdentifier([1, 2, 3, 4, 5, 6]);
       expect(() => oid.name, throwsA(TypeMatcher<UnknownOIDNameError>()));
     });
+
+    test('from name', (){
+      var oid = ObjectIdentifier.fromOiReadableName('commonName');
+      print(oid);
+      expect(oid.name, 'commonName');
+    });
   });
   
   group('asn.1 conversion', (){

@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:collection/collection.dart';
+import 'package:crypto/crypto.dart';
 
 import 'package:test/test.dart';
+import 'package:x509/src/asn1_util.dart';
 import 'package:x509/x509.dart';
 import 'dart:io';
 import 'package:asn1lib/asn1lib.dart';
@@ -167,7 +170,24 @@ void main() {
   group('csr', () {
     test('parse csr', () {
       var pem = File('test/files/csr.pem').readAsStringSync();
-      parsePem(pem).single as CertificationRequest;
+      var csr = parsePem(pem).single as CertificationRequest;
+      expect(csr is CertificationRequest, true);
+    });
+    test('parse csr with extensions', () {
+      var pem = File('test/files/self-signed/csr.pem').readAsStringSync();
+      var csr = parsePem(pem).single as CertificationRequest;
+      expect(csr is CertificationRequest, true);
+    });
+    test('generate csr', () {
+      var pem = File('test/files/self-signed/csr.pem').readAsStringSync();
+      var csr = parsePem(pem).single as CertificationRequest;
+      var bytes = csr.toAsn1().encodedBytes;
+      var p = ASN1Parser(bytes);
+      var newAsn1 = p.nextObject() as ASN1Sequence;
+      var newCsr = CertificationRequest.fromAsn1(newAsn1);
+      var newBytes = newCsr.toAsn1().encodedBytes;
+
+      expect(ListEquality().equals(bytes, newBytes), true);
     });
   });
 
@@ -456,6 +476,146 @@ MIIIHzCCB8WgAwIBAgIJf35N0O0if7S5MAoGCCqGSM49BAMCMIGwMT8wPQYDVQQDDDZFQURUcnVzdCBF
 
       var c = X509Certificate.fromAsn1(parser.nextObject() as ASN1Sequence);
       expect(c, isA<X509Certificate>());
+    });
+  });
+
+  group('self signed', (){
+
+    test('Parse root CA cert generated through openssl', (){
+      var pem = File('test/files/self-signed/rootCA.crt').readAsStringSync();
+      var cert = parsePem(pem).single as X509Certificate;
+      var pem2 = cert.toPem();
+      expect(pem2, pem);
+    });
+
+    test('Generate CA same as sample generated through openssl', (){
+      var pem = File('test/files/self-signed/rootCA.crt').readAsStringSync();
+      var privateKeyPem = File('test/files/self-signed/rootCA.key').readAsStringSync();
+      var cert = parsePem(pem).single as X509Certificate;
+      var privateKey = parsePem(privateKeyPem).single as PrivateKeyInfo;
+      var subject = Name.fromMap({
+        'commonName' : 'demo.mlopshub.com',
+        'countryName' : 'US',
+        'localityName' : 'San Fransisco',
+      });
+      var from = DateTime.utc(2024, 1, 4, 0, 53, 44);
+      var cert2 = X509Certificate.generateCA(
+          name: subject,
+          keyPair: privateKey.keyPair,
+          serialNumber: BigInt.parse('137084924843079655944714502240399509422757958046'),
+        from: from,
+        days: 356,
+      );
+      ASN1CompareUtil.compareTree(cert.tbsCertificate.toAsn1(), cert2.tbsCertificate.toAsn1());
+      var bytes1 = cert.tbsCertificate.toAsn1().valueBytes();
+      var bytes2 = cert2.tbsCertificate.toAsn1().valueBytes();
+      expect(ListEquality().equals(bytes1, bytes2), true);
+      var pem2 = cert2.toPem();
+      expect(pem2, pem);
+    });
+
+    test('Validate keyIdentifier for CA cert', (){
+      var pem = File('test/files/self-signed/rootCA.crt').readAsStringSync();
+      var cert = parsePem(pem).single as X509Certificate;
+      var publicKeyBytes = cert.tbsCertificate.subjectPublicKeyInfo?.publicKeyBytes;
+      var sha1Value = sha1.convert(publicKeyBytes!).bytes;
+      var ski = (cert.tbsCertificate.extensions?[0].extnValue as SubjectKeyIdentifier).keyIdentifier;
+      var aki = (cert.tbsCertificate.extensions?[1].extnValue as AuthorityKeyIdentifier).keyIdentifier;
+      expect(ListEquality().equals(sha1Value, ski), true);
+      expect(ListEquality().equals(sha1Value, aki), true);
+    });
+
+    test('Parse self signed certificate generated through openssl', (){
+      var pem = File('test/files/self-signed/server.crt').readAsStringSync();
+      var cert = parsePem(pem).single as X509Certificate;
+      var pem2 = cert.toPem();
+      expect(pem, pem2);
+    });
+
+    test('Parse self signed certificate generated through openssl same asn', (){
+      var pem = File('test/files/self-signed/server.crt').readAsStringSync();
+      var lines = pem
+          .split('\n')
+          .map((line) => line.trim())
+          .where((line) => line.isNotEmpty)
+          .toList();
+      var coded = lines.sublist(1, lines.length - 1).join('');
+      var der = base64.decode(coded);
+      var originalParser = ASN1Parser(der);
+      var originalAsn1 = originalParser.nextObject() as ASN1Sequence;
+      var originalAttributesAsn = ASN1Parser((originalAsn1.elements[0] as ASN1Sequence).elements[7].valueBytes()).nextObject();
+
+      var cert = parsePem(pem).single as X509Certificate;
+      var generatedAsn1 = cert.toAsn1();
+      var generatedCoded = generatedAsn1.encodedBytes;
+      var originalCoded = originalAsn1.encodedBytes;
+      var generatedAttributesAsn = ASN1Parser((generatedAsn1.elements[0] as ASN1Sequence).elements[7].valueBytes()).nextObject();
+      expect(originalCoded.length, generatedCoded.length);
+      ASN1CompareUtil.compareTree(originalAsn1, generatedAsn1);
+      ASN1CompareUtil.compareTree(originalAttributesAsn, generatedAttributesAsn);
+      expect(ListEquality().equals(originalAsn1.encodedBytes, generatedAsn1.encodedBytes), true);
+    });
+
+    test('Generate csr same as sample', (){
+      var pem = File('test/files/self-signed/csr.pem').readAsStringSync();
+      var privateKeyPem = File('test/files/self-signed/server.key').readAsStringSync();
+      var csr = parsePem(pem).single as CertificationRequest;
+      var privateKey = parsePem(privateKeyPem).single as PrivateKeyInfo;
+
+      var subjectPublicKeyInfo = SubjectPublicKeyInfo.fromPublicKey(privateKey.keyPair.publicKey!);
+      var subject = Name.fromMap({
+        'countryName' : 'US',
+        'stateOrProvinceName' : 'California',
+        'localityName' : 'San Fransisco',
+        'organizationName' : 'MLopsHub',
+        'organizationUnitName' : 'MlopsHub Dev',
+        'commonName' : 'demo.mlopshub.com',
+      });
+      var serverSubjectAlternateNames = SubjectAltNameExtension(names: [
+        DNSName('demo.mlopshub.com'),
+        DNSName('www.demo.mlopshub.com'),
+        IPAddressName(192, 168, 1, 5),
+        IPAddressName(192, 168, 1, 6),
+      ]);
+      var attributes = Attributes([ExtensionRequestAttribute([
+        serverSubjectAlternateNames
+      ])]);
+      var csri = CertificationRequestInfo(subject, subjectPublicKeyInfo, attributes: attributes);
+      var csr2 =  CertificationRequest.generate(csri, privateKey.keyPair.privateKey!);
+      ASN1CompareUtil.compareTree(csr.toAsn1(), csr2.toAsn1());
+      var bytes1 = csr.toAsn1().valueBytes();
+      var bytes2 = csr.toAsn1().valueBytes();
+      expect(ListEquality().equals(bytes1, bytes2), true);
+    });
+
+    test('Generate server certificate same as sample', (){
+      var serverPem = File('test/files/self-signed/server.crt').readAsStringSync();
+      var caPem = File('test/files/self-signed/rootCA.crt').readAsStringSync();
+      var serverKeyPem = File('test/files/self-signed/server.key').readAsStringSync();
+      var caKeyPem = File('test/files/self-signed/rootCA.key').readAsStringSync();
+      var csrPem = File('test/files/self-signed/csr.pem').readAsStringSync();
+      var serverCert = parsePem(serverPem).single as X509Certificate;
+      var caCert = parsePem(caPem).single as X509Certificate;
+      var serverKey = parsePem(serverKeyPem).single as PrivateKeyInfo;
+      var caKey = parsePem(caKeyPem).single as PrivateKeyInfo;
+      var csr = parsePem(csrPem).single as CertificationRequest;
+      
+      var extensions = <Extension>[
+        BasicConstraintsExtension(),
+        KeyUsageExtension.optional(digitalSignature: true, nonRepudiation: true, keyEncipherment: true, dataEncipherment: true),
+        SubjectAltNameExtension(names: [DNSName('demo.mlopshub.com')]),
+      ];
+
+      var serverCert2 = X509Certificate.selfSigned(caKey.keyPair.privateKey!,
+          csr, caCert: caCert, serialNumber: BigInt.parse('302062104447233620017396921218438266574345124003'),
+          from: DateTime.utc(2024,1,4,3,16,44), days: 365, extensions: extensions);
+
+      ASN1CompareUtil.compareTree(serverCert.toAsn1(), serverCert2.toAsn1());
+      var bytes1 = serverCert.toAsn1().valueBytes();
+      var bytes2 = serverCert2.toAsn1().valueBytes();
+      expect(ListEquality().equals(bytes1, bytes2), true);
+      var serverPem2 = serverCert2.toPem();
+      expect(serverPem2, serverPem);
     });
   });
 }

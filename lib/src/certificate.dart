@@ -1,7 +1,11 @@
-part of x509;
+part of 'x509_base.dart';
+
+const beginCert = '-----BEGIN CERTIFICATE-----';
+const endCert = '-----END CERTIFICATE-----';
 
 /// A Certificate.
 abstract class Certificate {
+
   /// The public key from this certificate.
   PublicKey get publicKey;
 }
@@ -21,6 +25,108 @@ class X509Certificate implements Certificate {
 
   const X509Certificate(
       this.tbsCertificate, this.signatureAlgorithm, this.signatureValue);
+
+  factory X509Certificate.generateCA({BigInt? serialNumber, String signatureType = 'sha256WithRSAEncryption',
+    required Name name,
+    int days = 30, required KeyPair keyPair, DateTime? from}){
+    serialNumber ??= BigInt.from(1);
+    if(keyPair.publicKey == null || keyPair.privateKey == null){
+      throw ArgumentError('The keyPair must have a valid public and private key that is not null', 'keyPair');
+    }
+    var now = from ?? DateTime.now();
+    var validity = Validity(notBefore: now, notAfter: now.add(Duration(days: days)));
+    var subjectPublicKeyInfo = SubjectPublicKeyInfo.fromPublicKey(keyPair.publicKey!);
+    var extensions = [
+      Extension(extnId: ObjectIdentifier.fromOiReadableName('subjectKeyIdentifier'),
+          extnValue: SubjectKeyIdentifier.fromPublicKeyBytes(subjectPublicKeyInfo.publicKeyBytes)),
+      Extension(extnId: ObjectIdentifier.fromOiReadableName('authorityKeyIdentifier'),
+          extnValue: AuthorityKeyIdentifier.fromPublicKeyBytes(subjectPublicKeyInfo.publicKeyBytes)),
+      Extension(extnId: ObjectIdentifier.fromOiReadableName('basicConstraints'),
+          extnValue: BasicConstraints(cA: true),
+          isCritical: true
+      ),
+      // Extension(extnId: ObjectIdentifier.fromOiReadableName('keyUsage'),
+      //     extnValue: KeyUsage.optional(keyCertSign: true),
+      //     isCritical: true)
+    ];
+    var tbsCertificate = TbsCertificate(
+        version: 3,
+        serialNumber: serialNumber,
+        signature: AlgorithmIdentifier.fromOiReadableName(signatureType),
+        issuer: name,
+        validity: validity,
+        subject: name,
+        subjectPublicKeyInfo: SubjectPublicKeyInfo.fromPublicKey(keyPair.publicKey!),
+        extensions: extensions);
+
+    var signer = keyPair.privateKey!.createSigner(algorithms.signing.rsa.sha256);
+    var data = tbsCertificate.toAsn1();
+    var signature = signer.sign(data.encodedBytes);
+
+    var cert = X509Certificate(tbsCertificate,
+        AlgorithmIdentifier.fromOiReadableName(signatureType),
+        signature.data);
+    return cert;
+  }
+
+  factory X509Certificate.selfSigned(PrivateKey privateKey, CertificationRequest certificationRequest, {int days = 30,
+    BigInt? serialNumber, Name? issuer, X509Certificate? caCert, DateTime? from, List<Extension>? extensions}){
+    var now = from ?? DateTime.now();
+    var validity = Validity(notBefore: now, notAfter: now.add(Duration(days: days)));
+    var extensionsMap = Map.fromEntries(extensions?.map((e) => MapEntry(e.extnId, e)).toList() ?? <MapEntry<ObjectIdentifier,Extension>>[]);
+    serialNumber ??= BigInt.from(1);
+
+    for(var attribute in (certificationRequest.certificationRequestInfo.attributes?.attributes ?? [])){
+      if(attribute is ExtensionRequestAttribute){
+        for (var element in attribute.extensions) {
+          if(!extensionsMap.containsKey(element.extnId)){
+            extensionsMap[element.extnId] = element;
+          }
+        }
+      }
+    }
+
+    caCert?.tbsCertificate.extensions?.forEach((element) {
+      var value = element.extnValue;
+      if(value is SubjectKeyIdentifier){
+        var newExtension = Extension(extnId: ObjectIdentifier.fromOiReadableName('authorityKeyIdentifier'),
+            extnValue: AuthorityKeyIdentifier.fromSubjectKeyIdentifier(value));
+        extensionsMap[newExtension.extnId] = newExtension;
+      }
+    });
+
+    var ski = Extension(extnId: ObjectIdentifier.fromOiReadableName('subjectKeyIdentifier'),
+      extnValue: SubjectKeyIdentifier.fromPublicKeyBytes(certificationRequest.certificationRequestInfo.subjectPublicKeyInfo.publicKeyBytes));
+
+    extensionsMap[ski.extnId] = ski;
+
+    var extensionsList = extensionsMap.values.toList();
+    extensionsList.sort((a, b) => a.extnId.name.compareTo(b.extnId.name));
+
+    var issuerToUse = issuer;
+    issuerToUse ??= caCert?.tbsCertificate.subject;
+    issuerToUse ??= certificationRequest.certificationRequestInfo.subject;
+
+    var tbsCertificate = TbsCertificate(
+        version: 3,
+        serialNumber: serialNumber,
+        signature: AlgorithmIdentifier.fromOiReadableName('sha256WithRSAEncryption'),
+        issuer: issuerToUse,
+        validity: validity,
+        subject: certificationRequest.certificationRequestInfo.subject,
+        subjectPublicKeyInfo: certificationRequest.certificationRequestInfo.subjectPublicKeyInfo,
+        extensions: extensionsList);
+
+    var signer = privateKey.createSigner(algorithms.signing.rsa.sha256);
+    var data = tbsCertificate.toAsn1();
+    var signature = signer.sign(data.encodedBytes);
+
+    var cert = X509Certificate(tbsCertificate,
+        AlgorithmIdentifier.fromOiReadableName('sha256WithRSAEncryption'),
+        signature.data);
+    return cert;
+
+  }
 
   /// Creates a certificate from an [ASN1Sequence].
   ///
@@ -46,6 +152,15 @@ class X509Certificate implements Certificate {
       ..add(fromDart(signatureValue));
   }
 
+  String toPem(){
+    var asn1 = toAsn1();
+    var bytes = asn1.encodedBytes;
+    var stringValue = base64.encode(bytes);
+    var chunks = StringUtils.chunk(stringValue, 64);
+    var pem = '$beginCert\n${chunks.join('\n')}\n$endCert';
+    return pem;
+  }
+
   @override
   String toString([String prefix = '']) {
     var buffer = StringBuffer();
@@ -64,7 +179,7 @@ class TbsCertificate {
   final int? version;
 
   /// The serial number of the certificate.
-  final int? serialNumber;
+  final BigInt? serialNumber;
 
   /// The signature of the certificate.
   final AlgorithmIdentifier? signature;
@@ -161,7 +276,7 @@ class TbsCertificate {
 
     return TbsCertificate(
         version: version,
-        serialNumber: (elements[0] as ASN1Integer).valueAsBigInteger.toInt(),
+        serialNumber: (elements[0] as ASN1Integer).valueAsBigInteger,
         signature: AlgorithmIdentifier.fromAsn1(elements[1] as ASN1Sequence),
         issuer: Name.fromAsn1(elements[2] as ASN1Sequence),
         validity: Validity.fromAsn1(elements[3] as ASN1Sequence),
@@ -193,6 +308,14 @@ class TbsCertificate {
       ..add(subject!.toAsn1())
       ..add(subjectPublicKeyInfo!.toAsn1());
     if (version! > 1) {
+      if(extensions?.isNotEmpty ?? false){
+        var extensionsSequence = ASN1Sequence();
+        for(var extension in extensions!){
+          extensionsSequence.add(extension.toAsn1());
+        }
+        var bytes = extensionsSequence.encodedBytes;
+        seq.add(ASN1Object.preEncoded(0xA3, bytes));
+      }
       if (issuerUniqueID != null) {
         // TODO
         // var iuid = ASN1BitString.fromBytes(issuerUniqueID);

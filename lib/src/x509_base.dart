@@ -10,9 +10,12 @@ import 'dart:convert';
 import 'package:quiver/core.dart';
 import 'package:quiver/collection.dart';
 import 'dart:typed_data';
+import 'package:basic_utils/basic_utils.dart' show StringUtils;
+import 'package:crypto/crypto.dart';
 import 'package:crypto_keys/crypto_keys.dart';
 export 'package:crypto_keys/crypto_keys.dart';
 
+import 'asn1_bit_string.dart';
 import 'util.dart';
 
 part 'certificate.dart';
@@ -24,6 +27,28 @@ class Name {
   final List<Map<ObjectIdentifier?, dynamic>> names;
 
   const Name(this.names);
+
+  /// Creates a Name from a map of Object Identifier readable names and values
+  /// eg.
+  /// {
+  ///     'commonName':certificateName,
+  ///     'countryName':countryCode,
+  ///     'stateOrProvinceName':state,
+  ///     'localityName':locality,
+  ///     'organizationName':certificateName,
+  /// }
+  ///
+  factory Name.fromMap(Map<String, dynamic> nameMap){
+    var names = nameMap.entries.map((cnEntry) {
+      var objectIdentifier = ObjectIdentifier.fromOiReadableName(cnEntry.key);
+      if(objectIdentifier == null){
+        throw ArgumentError('Object Identifier ${cnEntry.key} not supported!');
+      }
+      return {objectIdentifier: cnEntry.value};
+    }).toList();
+    return Name(names);
+  }
+
 
   /// Name ::= CHOICE { -- only one possibility for now --
   ///   rdnSequence  RDNSequence }
@@ -54,9 +79,16 @@ class Name {
     for (var n in names) {
       var set = ASN1Set();
       n.forEach((k, v) {
+        ASN1Object value;
+        //TODO: Make this more sensible
+        if(k?.name == 'commonName' || k?.name == 'localityName' || k?.name == 'stateOrProvinceName' || k?.name == 'organizationName' || k?.name == 'organizationUnitName'){
+          value = ASN1UTF8String(v);
+        }else{
+          value = fromDart(v);
+        }
         set.add(ASN1Sequence()
           ..add(fromDart(k))
-          ..add(fromDart(v)));
+          ..add(value));
       });
       seq.add(set);
     }
@@ -100,6 +132,14 @@ class SubjectPublicKeyInfo {
 
   SubjectPublicKeyInfo(this.algorithm, this.subjectPublicKey);
 
+  factory SubjectPublicKeyInfo.fromPublicKey(PublicKey subjectPublicKey){
+    if(subjectPublicKey is RsaPublicKey){
+      var ai = AlgorithmIdentifier.fromOiReadableName('rsaEncryption');
+      return SubjectPublicKeyInfo(ai, subjectPublicKey);
+    }
+    throw ArgumentError('PublicKey type ${subjectPublicKey.runtimeType} not supported');
+  }
+
   factory SubjectPublicKeyInfo.fromAsn1(ASN1Sequence sequence) {
     final algorithm =
         AlgorithmIdentifier.fromAsn1(sequence.elements[0] as ASN1Sequence);
@@ -121,6 +161,12 @@ class SubjectPublicKeyInfo {
       ..add(algorithm.toAsn1())
       ..add(keyToAsn1(subjectPublicKey));
   }
+
+  /// This function returns the bytes that represent the public key
+  /// this is useful for generating the subjectKeyIdentifier
+  Uint8List get publicKeyBytes{
+    return keyToAsn1(subjectPublicKey).contentBytes();
+  }
 }
 
 class AlgorithmIdentifier {
@@ -128,6 +174,11 @@ class AlgorithmIdentifier {
   final dynamic parameters;
 
   AlgorithmIdentifier(this.algorithm, this.parameters);
+
+  factory AlgorithmIdentifier.fromOiReadableName(String readableName){
+    var algorithm = ObjectIdentifier.fromOiReadableName(readableName);
+    return AlgorithmIdentifier(algorithm, null);
+  }
 
   /// AlgorithmIdentifier  ::=  SEQUENCE  {
   ///   algorithm               OBJECT IDENTIFIER,
@@ -276,4 +327,8 @@ Iterable parsePem(String pem) sync* {
     var bytes = base64.decode(b);
     yield _parseDer(bytes, type);
   }
+}
+
+abstract class ToAsn1<T extends ASN1Object>{
+  T toAsn1();
 }

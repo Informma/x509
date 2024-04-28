@@ -1,9 +1,12 @@
-part of x509;
+part of 'x509_base.dart';
 
 class ObjectIdentifier {
   final List<int> nodes;
 
   const ObjectIdentifier(this.nodes);
+
+  static ObjectIdentifier get keyUsage => ObjectIdentifier.fromOiReadableName('keyUsage');
+  static ObjectIdentifier get subjectAltName => ObjectIdentifier.fromOiReadableName('subjectAltName');
 
   ObjectIdentifier? get parent => nodes.length > 1
       ? ObjectIdentifier(nodes.take(nodes.length - 1).toList())
@@ -12,6 +15,14 @@ class ObjectIdentifier {
   factory ObjectIdentifier.fromAsn1(ASN1ObjectIdentifier id) {
     // ASN1ObjectIdentifier parameter 'oi' is the same as ObjectIdentifier parameter nodes
     return ObjectIdentifier(id.oi);
+  }
+
+  factory ObjectIdentifier.fromOiReadableName(String readableName) {
+    var oiEntry = _getOidEntryFromName(readableName);
+    if(oiEntry == null){
+      throw ArgumentError('Could not find Object Identifier with name $readableName');
+    }
+    return ObjectIdentifier(oiEntry.identifier);
   }
 
   ASN1ObjectIdentifier toAsn1() {
@@ -172,7 +183,8 @@ class ObjectIdentifier {
                 6: 'countersignature',
                 7: 'challengePassword',
                 8: 'unstructuredAddress',
-                9: 'extendedCertificateAttributes'
+                9: 'extendedCertificateAttributes',
+                14: 'extensionRequest',
               },
               3: {null: 'pkcs-3', 1: 'dhKeyAgreement'},
               7: {
@@ -441,8 +453,8 @@ class ObjectIdentifier {
           12: 'title',
           35: 'userPassword',
           36: 'userCertificate',
-          37: 'cAcertificate',
-          38: 'authorityRecovationList',
+          37: 'cACertificate',
+          38: 'authorityRevocationList',
           39: 'certificateRevocationList',
           40: 'crossCertificatePair',
           41: 'name',
@@ -494,7 +506,7 @@ class ObjectIdentifier {
                 2: 'netscape-base-url',
                 3: 'netscape-revocation-url',
                 4: 'netscape-ca-revocation-url',
-                7: 'netcape-cert-renewal-url',
+                7: 'netscape-cert-renewal-url',
                 8: 'netscape-policy-url',
                 12: 'netscape-ssl-server-name',
                 13: 'netscape-comment'
@@ -528,10 +540,86 @@ class ObjectIdentifier {
       }
     }
   };
+
+  static List<OidEntry> oidDatabase = _buildOidDatabase();
+
+  static OidEntry? _getOidEntryFromName(String oidReadableName){
+    for(var entry in oidDatabase){
+      if(entry.readableName == oidReadableName){
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  static List<OidEntry> _buildOidDatabase(){
+    var database = <OidEntry>[];
+    for(var entry in _tree.entries){
+      addEntry(database, entry, null);
+    }
+    return database;
+  }
+
+  static void addEntry(List<OidEntry> database, MapEntry<int?, Object> entry, OidEntry? parent) {
+    if(entry.key != null){
+      var current = List<int>.from(parent?.identifier ?? [])..add(entry.key!);
+      var value = entry.value;
+      if(value is Map && value[null] is String){
+        var name = value[null] as String;
+        var fullName = [if(parent != null) parent.fullName, name].join('.');
+        var newOidEntry = OidEntry(current.join('.'), name, fullName, current);
+        database.add(newOidEntry);
+        for(var newEntry in value.entries){
+          if(newEntry.key != null){
+            addEntry(database, newEntry as MapEntry<int?, Object>, newOidEntry);
+          }
+        }
+      }else if(value is String){
+        var name = value;
+        var fullName = [if(parent != null) parent.fullName, name].join('.');
+        database.add(OidEntry(current.join('.'), name, fullName, current));
+      }
+    }
+  }
+}
+
+class OidEntry{
+  String identifierString;
+  String readableName;
+  String fullName;
+  List<int> identifier;
+
+  OidEntry(this.identifierString, this.readableName, this.fullName, this.identifier);
+
+  @override
+  String toString() {
+    // TODO: implement toString
+    return '''
+{
+  $identifierString
+  $readableName
+  $fullName
+  $identifier
+ }    
+    ''';
+  }
 }
 
 // Throw when There OID name is unknown.
 // For example, be defined unique extension.
 class UnknownOIDNameError extends StateError {
-  UnknownOIDNameError(String message) : super(message);
+  UnknownOIDNameError(super.message);
+}
+
+class OIDDatabase{
+  static List<OidEntry> oidDatabase = ObjectIdentifier._buildOidDatabase();
+  static OidEntry missingEntry = OidEntry('not found', 'not found', 'not found', []);
+  static OidEntry getEntryByIdentifierString(String? identifierString){
+    for(var entry in oidDatabase){
+      if(entry.identifierString == identifierString){
+        return entry;
+      }
+    }
+    return missingEntry;
+  }
 }

@@ -146,7 +146,7 @@ KeyPair keyPairFromAsn1(ASN1BitString data, ObjectIdentifier algorithm) {
       return ecKeyPairFromAsn1(sequence);
     case 'sha1WithRSAEncryption':
   }
-  throw UnimplementedError('Unknown algoritmh $algorithm');
+  throw UnimplementedError('Unknown algorithm $algorithm');
 }
 
 PublicKey publicKeyFromAsn1(ASN1BitString data, AlgorithmIdentifier algorithm) {
@@ -159,7 +159,7 @@ PublicKey publicKeyFromAsn1(ASN1BitString data, AlgorithmIdentifier algorithm) {
           curve: _curveObjectIdentifierToIdentifier(algorithm.parameters));
     case 'sha1WithRSAEncryption':
   }
-  throw UnimplementedError('Unknown algoritmh $algorithm');
+  throw UnimplementedError('Unknown algorithm $algorithm');
 }
 
 String keyToString(Key key, [String prefix = '']) {
@@ -257,7 +257,7 @@ dynamic toDart(ASN1Object obj) {
   //
   // The Class type is below:
   // 0 0(0): Universal
-  // 0 1(1): Applicaation
+  // 0 1(1): Application
   // 1 0(2): Context-Specific
   // 1 1(3): Private
   //
